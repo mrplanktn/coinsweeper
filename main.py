@@ -1,9 +1,21 @@
-import os, json, time, requests, crayons, sys
+import os, json, time, requests, crayons, sys, re, hmac, hashlib, random, pytz, math
 from datetime import datetime
 import urllib.parse
 
+
+def calc(i, s, a, o, d, g):
+    st = (10 * i + max(0, 1200 - 10 * s) + 2000) * (1 + o / a) / 10
+    return math.floor(st) + value(g)
+
+def generate_hash(key, message):
+    hmac_obj = hmac.new(key.encode(), message.encode(), hashlib.sha256)
+    return hmac_obj.hexdigest()
+
 def url_decode(encoded_url):
     return urllib.parse.unquote(encoded_url)
+
+def value(input_str):
+    return sum(ord(char) for char in input_str) / 1e5
 
 def print_banner():
     print(crayons.blue('██     ██ ██ ███    ██ ███████ ███    ██ ██ ██████  '))
@@ -72,36 +84,59 @@ class ByBit:
                 return {"success": False, "error": "Unexpected status code"}
         except requests.RequestException as error:
             return {"success": False, "error": str(error)}
+        
+    def userinfo(self):
+        try:
+            user = self.session.get("https://api.bybitcoinsweeper.com/api/users/me", headers=self.headers).json()
+            return user
+        except requests.RequestException as error:
+            return {"success": False, "error": str(error)}        
 
 
     def score(self):
         for i in range(3):
             try:
-                gametime = int(time.time()) % 211 + 90
-                score = int(time.time()) % 301 + 600
+                min_game_time = 50
+                max_game_time = 90
+                game_time = random.randint(min_game_time, max_game_time)
                 playgame = self.session.post("https://api.bybitcoinsweeper.com/api/games/start", json={}, headers=self.headers).json()
+                if "message" in playgame:
+                    if("expired" in playgame["message"]):
+                        self.log("Query Expired Sir", "ERROR")
+                        sys.exit(0)
                 gameid = playgame["id"]
                 rewarddata = playgame["rewards"]
-                self.log(f"Starting game {i + 1}/3. Play time: {gametime} seconds", 'INFO')
-                self.wait(gametime)
+                started_at = playgame["createdAt"]
+                userdata = self.userinfo()
+                self.log(f"Total Score: {userdata['score']+userdata['scoreFromReferrals']}","SUCCESS")
+                unix_time_started = datetime.strptime(started_at, '%Y-%m-%dT%H:%M:%S.%fZ')
+                unix_time_started = unix_time_started.replace(tzinfo=pytz.UTC)
+                starttime = int(unix_time_started.timestamp() * 1000)
+                self.log(f"Starting game {i + 1}/3. Play time: {game_time} seconds", 'INFO')
+                self.wait(game_time)
+                i = f"{userdata['id']}v$2f1"
+                first = f"{i}-{gameid}-{starttime}"
+                last = f"{game_time}-{gameid}"
+                score = calc(45, game_time, 54, 9, True, gameid)
                 game_data = {
                     "bagCoins": rewarddata["bagCoins"],
                     "bits": rewarddata["bits"],
                     "gifts": rewarddata["gifts"],
                     "gameId": gameid,
-                    'gameTime': gametime,
-                    'score': score
+                    'gameTime': game_time,
+                    "h": generate_hash(first ,last),
+                    'score': float(score)
                 }
                 res = self.session.post('https://api.bybitcoinsweeper.com/api/games/win', json=game_data, headers=self.headers)
+                print(res.text)
                 if res.status_code == 201:
                     self.info["score"] += score
-                    self.log(f"Game Played Successfully: received {score} points | Total: {self.info['score']}","SUCCESS")
+                    self.log(f"Game Played Successfully","SUCCESS")
                 elif res.status_code == 401:
                     self.log('Token expired, need to self.log in again', "ERROR")
                     return False
                 else:
                     self.log(f"An Error Occurred With Code {res.status_code}", 'ERROR')
-
                 self.wait(5)
             except requests.RequestException:
                 self.log('Too Many Requests, Please Wait', 'WARNING')
